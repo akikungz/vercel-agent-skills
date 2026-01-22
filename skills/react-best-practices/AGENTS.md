@@ -24,7 +24,7 @@ Comprehensive performance optimization guide for React and Next.js applications,
    - 1.1 [Defer Await Until Needed](#11-defer-await-until-needed)
    - 1.2 [Dependency-Based Parallelization](#12-dependency-based-parallelization)
    - 1.3 [Prevent Waterfall Chains in API Routes](#13-prevent-waterfall-chains-in-api-routes)
-   - 1.4 [Promise.all() for Independent Operations](#14-promiseall-for-independent-operations)
+   - 1.4 [Promise.allSettled() for Independent Operations](#14-promiseallsettled-for-independent-operations)
    - 1.5 [Strategic Suspense Boundaries](#15-strategic-suspense-boundaries)
 2. [Bundle Size Optimization](#2-bundle-size-optimization) — **CRITICAL**
    - 2.1 [Avoid Barrel File Imports](#21-avoid-barrel-file-imports)
@@ -47,12 +47,14 @@ Comprehensive performance optimization guide for React and Next.js applications,
    - 4.4 [Version and Minimize localStorage Data](#44-version-and-minimize-localstorage-data)
 5. [Re-render Optimization](#5-re-render-optimization) — **MEDIUM**
    - 5.1 [Defer State Reads to Usage Point](#51-defer-state-reads-to-usage-point)
-   - 5.2 [Extract to Memoized Components](#52-extract-to-memoized-components)
-   - 5.3 [Narrow Effect Dependencies](#53-narrow-effect-dependencies)
-   - 5.4 [Subscribe to Derived State](#54-subscribe-to-derived-state)
-   - 5.5 [Use Functional setState Updates](#55-use-functional-setstate-updates)
-   - 5.6 [Use Lazy State Initialization](#56-use-lazy-state-initialization)
-   - 5.7 [Use Transitions for Non-Urgent Updates](#57-use-transitions-for-non-urgent-updates)
+   - 5.2 [Do not wrap a simple expression with a primitive result type in useMemo](#52-do-not-wrap-a-simple-expression-with-a-primitive-result-type-in-usememo)
+   - 5.3 [Extract Default Non-primitive Parameter Value from Memoized Component to Constant](#53-extract-default-non-primitive-parameter-value-from-memoized-component-to-constant)
+   - 5.4 [Extract to Memoized Components](#54-extract-to-memoized-components)
+   - 5.5 [Narrow Effect Dependencies](#55-narrow-effect-dependencies)
+   - 5.6 [Subscribe to Derived State](#56-subscribe-to-derived-state)
+   - 5.7 [Use Functional setState Updates](#57-use-functional-setstate-updates)
+   - 5.8 [Use Lazy State Initialization](#58-use-lazy-state-initialization)
+   - 5.9 [Use Transitions for Non-Urgent Updates](#59-use-transitions-for-non-urgent-updates)
 6. [Rendering Performance](#6-rendering-performance) — **MEDIUM**
    - 6.1 [Animate SVG Wrapper Instead of SVG Element](#61-animate-svg-wrapper-instead-of-svg-element)
    - 6.2 [CSS content-visibility for Long Lists](#62-css-content-visibility-for-long-lists)
@@ -62,7 +64,7 @@ Comprehensive performance optimization guide for React and Next.js applications,
    - 6.6 [Use Activity Component for Show/Hide](#66-use-activity-component-for-showhide)
    - 6.7 [Use Explicit Conditional Rendering](#67-use-explicit-conditional-rendering)
 7. [JavaScript Performance](#7-javascript-performance) — **LOW-MEDIUM**
-   - 7.1 [Batch DOM CSS Changes](#71-batch-dom-css-changes)
+   - 7.1 [Avoid Layout Thrashing](#71-avoid-layout-thrashing)
    - 7.2 [Build Index Maps for Repeated Lookups](#72-build-index-maps-for-repeated-lookups)
    - 7.3 [Cache Property Access in Loops](#73-cache-property-access-in-loops)
    - 7.4 [Cache Repeated Function Calls](#74-cache-repeated-function-calls)
@@ -76,7 +78,7 @@ Comprehensive performance optimization guide for React and Next.js applications,
    - 7.12 [Use toSorted() Instead of sort() for Immutability](#712-use-tosorted-instead-of-sort-for-immutability)
 8. [Advanced Patterns](#8-advanced-patterns) — **LOW**
    - 8.1 [Store Event Handlers in Refs](#81-store-event-handlers-in-refs)
-   - 8.2 [useLatest for Stable Callback Refs](#82-uselatest-for-stable-callback-refs)
+   - 8.2 [useEffectEvent for Stable Callback Refs](#82-useeffectevent-for-stable-callback-refs)
 
 ---
 
@@ -166,15 +168,16 @@ This optimization is especially valuable when the skipped branch is frequently t
 
 **Impact: CRITICAL (2-10× improvement)**
 
-For operations with partial dependencies, use `better-all` to maximize parallelism. It automatically starts each task at the earliest possible moment.
+For operations with partial dependencies, use `better-all` to maximize parallelism. It automatically starts each task at the earliest possible moment. When using native promise combinators prefer `Promise.allSettled()` and handle settled results.
 
 **Incorrect: profile waits for config unnecessarily**
 
 ```typescript
-const [user, config] = await Promise.all([
+const results = await Promise.allSettled([
   fetchUser(),
   fetchConfig()
 ])
+const [user, config] = results.map(r => r.status === 'fulfilled' ? r.value : undefined)
 const profile = await fetchProfile(user.id)
 ```
 
@@ -191,6 +194,22 @@ const { user, config, profile } = await all({
   }
 })
 ```
+
+**Alternative without extra dependencies:**
+
+```typescript
+const userPromise = fetchUser()
+const profilePromise = userPromise.then(user => fetchProfile(user.id))
+
+const results = await Promise.allSettled([
+  userPromise,
+  fetchConfig(),
+  profilePromise
+])
+const [user, config, profile] = results.map(r => r.status === 'fulfilled' ? r.value : undefined)
+```
+
+We can also create all the promises first, and do `Promise.allSettled()` at the end and then map settled results.
 
 Reference: [https://github.com/shuding/better-all](https://github.com/shuding/better-all)
 
@@ -218,21 +237,22 @@ export async function GET(request: Request) {
   const sessionPromise = auth()
   const configPromise = fetchConfig()
   const session = await sessionPromise
-  const [config, data] = await Promise.all([
+  const results = await Promise.allSettled([
     configPromise,
     fetchData(session.user.id)
   ])
+  const [config, data] = results.map(r => r.status === 'fulfilled' ? r.value : undefined)
   return Response.json({ data, config })
 }
 ```
 
 For operations with more complex dependency chains, use `better-all` to automatically maximize parallelism (see Dependency-Based Parallelization).
 
-### 1.4 Promise.all() for Independent Operations
+### 1.4 Promise.allSettled() for Independent Operations
 
 **Impact: CRITICAL (2-10× improvement)**
 
-When async operations have no interdependencies, execute them concurrently using `Promise.all()`.
+When async operations have no interdependencies, execute them concurrently using `Promise.allSettled()` and handle settled results.
 
 **Incorrect: sequential execution, 3 round trips**
 
@@ -245,11 +265,12 @@ const comments = await fetchComments()
 **Correct: parallel execution, 1 round trip**
 
 ```typescript
-const [user, posts, comments] = await Promise.all([
+const results = await Promise.allSettled([
   fetchUser(),
   fetchPosts(),
   fetchComments()
 ])
+const [user, posts, comments] = results.map(r => r.status === 'fulfilled' ? r.value : undefined)
 ```
 
 ### 1.5 Strategic Suspense Boundaries
@@ -1295,7 +1316,71 @@ function ShareButton({ chatId }: { chatId: string }) {
 }
 ```
 
-### 5.2 Extract to Memoized Components
+### 5.2 Do not wrap a simple expression with a primitive result type in useMemo
+
+**Impact: LOW-MEDIUM (wasted computation on every render)**
+
+When an expression is simple (few logical or arithmetical operators) and has a primitive result type (boolean, number, string), do not wrap it in `useMemo`.
+
+Calling `useMemo` and comparing hook dependencies may consume more resources than the expression itself.
+
+**Incorrect:**
+
+```tsx
+function Header({ user, notifications }: Props) {
+  const isLoading = useMemo(() => {
+    return user.isLoading || notifications.isLoading
+  }, [user.isLoading, notifications.isLoading])
+
+  if (isLoading) return <Skeleton />
+  // return some markup
+}
+```
+
+**Correct:**
+
+```tsx
+function Header({ user, notifications }: Props) {
+  const isLoading = user.isLoading || notifications.isLoading
+
+  if (isLoading) return <Skeleton />
+  // return some markup
+}
+```
+
+### 5.3 Extract Default Non-primitive Parameter Value from Memoized Component to Constant
+
+**Impact: MEDIUM (restores memoization by using a constant for default value)**
+
+When memoized component has a default value for some non-primitive optional parameter, such as an array, function, or object, calling the component without that parameter results in broken memoization. This is because new value instances are created on every rerender, and they do not pass strict equality comparison in `memo()`.
+
+To address this issue, extract the default value into a constant.
+
+**Incorrect: `onClick` has different values on every rerender**
+
+```tsx
+const UserAvatar = memo(function UserAvatar({ onClick = () => {} }: { onClick?: () => void }) {
+  // ...
+})
+
+// Used without optional onClick
+<UserAvatar />
+```
+
+**Correct: stable default value**
+
+```tsx
+const NOOP = () => {};
+
+const UserAvatar = memo(function UserAvatar({ onClick = NOOP }: { onClick?: () => void }) {
+  // ...
+})
+
+// Used without optional onClick
+<UserAvatar />
+```
+
+### 5.4 Extract to Memoized Components
 
 **Impact: MEDIUM (enables early returns)**
 
@@ -1335,7 +1420,7 @@ function Profile({ user, loading }: Props) {
 
 **Note:** If your project has [React Compiler](https://react.dev/learn/react-compiler) enabled, manual memoization with `memo()` and `useMemo()` is not necessary. The compiler automatically optimizes re-renders.
 
-### 5.3 Narrow Effect Dependencies
+### 5.5 Narrow Effect Dependencies
 
 **Impact: LOW (minimizes effect re-runs)**
 
@@ -1376,7 +1461,7 @@ useEffect(() => {
 }, [isMobile])
 ```
 
-### 5.4 Subscribe to Derived State
+### 5.6 Subscribe to Derived State
 
 **Impact: MEDIUM (reduces re-render frequency)**
 
@@ -1401,7 +1486,7 @@ function Sidebar() {
 }
 ```
 
-### 5.5 Use Functional setState Updates
+### 5.7 Use Functional setState Updates
 
 **Impact: MEDIUM (prevents stale closures and unnecessary callback recreations)**
 
@@ -1479,7 +1564,7 @@ function TodoList() {
 
 **Note:** If your project has [React Compiler](https://react.dev/learn/react-compiler) enabled, the compiler can automatically optimize some cases, but functional updates are still recommended for correctness and to prevent stale closure bugs.
 
-### 5.6 Use Lazy State Initialization
+### 5.8 Use Lazy State Initialization
 
 **Impact: MEDIUM (wasted computation on every render)**
 
@@ -1533,7 +1618,7 @@ Use lazy initialization when computing initial values from localStorage/sessionS
 
 For simple primitives (`useState(0)`), direct references (`useState(props.value)`), or cheap literals (`useState({})`), the function form is unnecessary.
 
-### 5.7 Use Transitions for Non-Urgent Updates
+### 5.9 Use Transitions for Non-Urgent Updates
 
 **Impact: MEDIUM (maintains UI responsiveness)**
 
@@ -1864,16 +1949,28 @@ function Badge({ count }: { count: number }) {
 
 Micro-optimizations for hot paths can add up to meaningful improvements.
 
-### 7.1 Batch DOM CSS Changes
+### 7.1 Avoid Layout Thrashing
 
-**Impact: MEDIUM (reduces reflows/repaints)**
+**Impact: MEDIUM (prevents forced synchronous layouts and reduces performance bottlenecks)**
 
 Avoid interleaving style writes with layout reads. When you read a layout property (like `offsetWidth`, `getBoundingClientRect()`, or `getComputedStyle()`) between style changes, the browser is forced to trigger a synchronous reflow.
+
+**This is OK: browser batches style changes**
+
+```typescript
+function updateElementStyles(element: HTMLElement) {
+  // Each line invalidates style, but browser batches the recalculation
+  element.style.width = '100px'
+  element.style.height = '200px'
+  element.style.backgroundColor = 'blue'
+  element.style.border = '1px solid black'
+}
+```
 
 **Incorrect: interleaved reads and writes force reflows**
 
 ```typescript
-function updateElementStyles(element: HTMLElement) {
+function layoutThrashing(element: HTMLElement) {
   element.style.width = '100px'
   const width = element.offsetWidth  // Forces reflow
   element.style.height = '200px'
@@ -1885,15 +1982,60 @@ function updateElementStyles(element: HTMLElement) {
 
 ```typescript
 function updateElementStyles(element: HTMLElement) {
-  element.classList.add('highlighted-box')
+  // Batch all writes together
+  element.style.width = '100px'
+  element.style.height = '200px'
+  element.style.backgroundColor = 'blue'
+  element.style.border = '1px solid black'
+  
+  // Read after all writes are done (single reflow)
+  const { width, height } = element.getBoundingClientRect()
+}
+```
 
+**Correct: batch reads, then writes**
+
+```typescript
+function updateElementStyles(element: HTMLElement) {
+  element.classList.add('highlighted-box')
+  
   const { width, height } = element.getBoundingClientRect()
 }
 ```
 
 **Better: use CSS classes**
 
+**React example:**
+
+```tsx
+// Incorrect: interleaving style changes with layout queries
+function Box({ isHighlighted }: { isHighlighted: boolean }) {
+  const ref = useRef<HTMLDivElement>(null)
+  
+  useEffect(() => {
+    if (ref.current && isHighlighted) {
+      ref.current.style.width = '100px'
+      const width = ref.current.offsetWidth // Forces layout
+      ref.current.style.height = '200px'
+    }
+  }, [isHighlighted])
+  
+  return <div ref={ref}>Content</div>
+}
+
+// Correct: toggle class
+function Box({ isHighlighted }: { isHighlighted: boolean }) {
+  return (
+    <div className={isHighlighted ? 'highlighted-box' : ''}>
+      Content
+    </div>
+  )
+}
+```
+
 Prefer CSS classes over inline styles when possible. CSS files are cached by the browser, and classes provide better separation of concerns and are easier to maintain.
+
+See [this gist](https://gist.github.com/paulirish/5d52fb081b3570c81e3a) and [CSS Triggers](https://csstriggers.com/) for more information on layout-forcing operations.
 
 ### 7.2 Build Index Maps for Repeated Lookups
 
@@ -2458,23 +2600,11 @@ function useWindowEvent(event: string, handler: (e) => void) {
 
 `useEffectEvent` provides a cleaner API for the same pattern: it creates a stable function reference that always calls the latest version of the handler.
 
-### 8.2 useLatest for Stable Callback Refs
+### 8.2 useEffectEvent for Stable Callback Refs
 
 **Impact: LOW (prevents effect re-runs)**
 
 Access latest values in callbacks without adding them to dependency arrays. Prevents effect re-runs while avoiding stale closures.
-
-**Implementation:**
-
-```typescript
-function useLatest<T>(value: T) {
-  const ref = useRef(value)
-  useLayoutEffect(() => {
-    ref.current = value
-  }, [value])
-  return ref
-}
-```
 
 **Incorrect: effect re-runs on every callback change**
 
@@ -2489,15 +2619,17 @@ function SearchInput({ onSearch }: { onSearch: (q: string) => void }) {
 }
 ```
 
-**Correct: stable effect, fresh callback**
+**Correct: using React's useEffectEvent**
 
 ```tsx
+import { useEffectEvent } from 'react';
+
 function SearchInput({ onSearch }: { onSearch: (q: string) => void }) {
   const [query, setQuery] = useState('')
-  const onSearchRef = useLatest(onSearch)
+  const onSearchEvent = useEffectEvent(onSearch)
 
   useEffect(() => {
-    const timeout = setTimeout(() => onSearchRef.current(query), 300)
+    const timeout = setTimeout(() => onSearchEvent(query), 300)
     return () => clearTimeout(timeout)
   }, [query])
 }

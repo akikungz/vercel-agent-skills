@@ -27,10 +27,11 @@ export async function GET(request: Request) {
   const sessionPromise = auth()
   const configPromise = fetchConfig()
   const session = await sessionPromise
-  const [config, data] = await Promise.all([
+  const results = await Promise.allSettled([
     configPromise,
     fetchData(session.user.id)
   ])
+  const [config, data] = results.map(r => r.status === 'fulfilled' ? r.value : undefined)
   return Response.json({ data, config })
 }
 ```

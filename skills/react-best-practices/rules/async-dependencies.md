@@ -7,15 +7,16 @@ tags: async, parallelization, dependencies, better-all
 
 ## Dependency-Based Parallelization
 
-For operations with partial dependencies, use `better-all` to maximize parallelism. It automatically starts each task at the earliest possible moment.
+For operations with partial dependencies, use `better-all` to maximize parallelism. It automatically starts each task at the earliest possible moment. When using native promise combinators prefer `Promise.allSettled()` and handle settled results.
 
 **Incorrect (profile waits for config unnecessarily):**
 
 ```typescript
-const [user, config] = await Promise.all([
+const results = await Promise.allSettled([
   fetchUser(),
   fetchConfig()
 ])
+const [user, config] = results.map(r => r.status === 'fulfilled' ? r.value : undefined)
 const profile = await fetchProfile(user.id)
 ```
 
@@ -35,17 +36,18 @@ const { user, config, profile } = await all({
 
 **Alternative without extra dependencies:**
 
-We can also create all the promises first, and do `Promise.all()` at the end.
+We can also create all the promises first, and do `Promise.allSettled()` at the end and then map settled results.
 
 ```typescript
 const userPromise = fetchUser()
 const profilePromise = userPromise.then(user => fetchProfile(user.id))
 
-const [user, config, profile] = await Promise.all([
+const results = await Promise.allSettled([
   userPromise,
   fetchConfig(),
   profilePromise
 ])
+const [user, config, profile] = results.map(r => r.status === 'fulfilled' ? r.value : undefined)
 ```
 
 Reference: [https://github.com/shuding/better-all](https://github.com/shuding/better-all)
