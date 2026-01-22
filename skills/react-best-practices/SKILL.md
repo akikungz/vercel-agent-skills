@@ -38,7 +38,7 @@ Reference these guidelines when:
 ### 1. Eliminating Waterfalls (CRITICAL)
 
 - `async-defer-await` - Move await into branches where actually used
-- `async-parallel` - Use Promise.all() for independent operations
+- `async-parallel` - Use Promise.allSettled() for independent operations
 - `async-dependencies` - Use better-all for partial dependencies
 - `async-api-routes` - Start promises early, await late in API routes
 - `async-suspense-boundaries` - Use Suspense to stream content
